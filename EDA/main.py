@@ -31,6 +31,16 @@ categories = {
 }
 
 n_transactions = 15000
+
+# Customer pool: 2000 unique customers, top 20% are heavy buyers (5x visit rate)
+N_CUSTOMERS = 2000
+customer_ids = [f'C{str(i).zfill(4)}' for i in range(1, N_CUSTOMERS + 1)]
+customer_weights = np.concatenate([
+    np.full(int(N_CUSTOMERS * 0.2), 5.0),
+    np.full(N_CUSTOMERS - int(N_CUSTOMERS * 0.2), 1.0)
+])
+customer_weights /= customer_weights.sum()
+
 start_date = datetime(2025, 1, 1)
 
 # Create date range
@@ -42,6 +52,8 @@ transactions = []
 transaction_id = 1000
 
 for date in dates:
+    # Assign one customer per transaction (heavy buyers sampled more often)
+    cust_id = np.random.choice(customer_ids, p=customer_weights)
     # Determine number of items in this transaction (1-5 items)
     n_items = np.random.randint(1, 6)
 
@@ -79,6 +91,7 @@ for date in dates:
 
         transactions.append({
             'transaction_id': f'TXN-{transaction_id}',
+            'customer_id': cust_id,
             'date': date,
             'category': category,
             'product': product,
@@ -150,19 +163,71 @@ print("\n" + "=" * 70)
 print("ADVANCED BUSINESS INSIGHTS")
 print("=" * 70)
 
-# 1. RFM-like Analysis (using transaction frequency)
-print("\n📊 TRANSACTION FREQUENCY ANALYSIS")
+# 1. Customer Overview
+print("\n👥 CUSTOMER OVERVIEW")
 print("-" * 50)
+print(f"Unique Customers:         {df['customer_id'].nunique()}")
+print(f"Unique Transactions:      {df['transaction_id'].nunique()}")
+txn_per_cust = df.groupby('customer_id')['transaction_id'].nunique()
+print(f"Avg Visits per Customer:  {txn_per_cust.mean():.1f}")
+print(f"Median Visits:            {txn_per_cust.median():.0f}")
+repeat_rate = (txn_per_cust > 1).mean() * 100
+print(f"Repeat Purchase Rate:     {repeat_rate:.1f}%")
+
+# 2. RFM Analysis
+print("\n\n📊 RFM ANALYSIS (Recency / Frequency / Monetary)")
+print("-" * 50)
+reference_date = datetime(2026, 1, 1)
+
+rfm = df.groupby('customer_id').agg(
+    Recency=('date', lambda x: (reference_date - x.max()).days),
+    Frequency=('transaction_id', 'nunique'),
+    Monetary=('total_amount', 'sum')
+).reset_index()
+
+# Score each dimension into quartiles (4 = best)
+rfm['R_score'] = pd.qcut(rfm['Recency'], q=4, labels=[4, 3, 2, 1])          # lower recency days = more recent = better
+rfm['F_score'] = pd.qcut(rfm['Frequency'].rank(method='first'), q=4, labels=[1, 2, 3, 4])
+rfm['M_score'] = pd.qcut(rfm['Monetary'].rank(method='first'), q=4, labels=[1, 2, 3, 4])
+rfm['RFM_total'] = rfm[['R_score', 'F_score', 'M_score']].astype(int).sum(axis=1)
+
+def segment_customer(row):
+    r, f, m = int(row['R_score']), int(row['F_score']), int(row['M_score'])
+    if r >= 4 and f >= 4 and m >= 4:
+        return 'Champions'
+    elif r >= 3 and f >= 3:
+        return 'Loyal Customers'
+    elif r >= 3 and f == 2:
+        return 'Potential Loyalists'
+    elif r >= 3 and f == 1:
+        return 'New Customers'
+    elif r == 2 and f >= 3:
+        return 'At Risk'
+    elif r == 2 and f <= 2:
+        return 'Needs Attention'
+    elif r == 1 and f >= 3:
+        return 'Cannot Lose Them'
+    else:
+        return 'Lost'
+
+rfm['Segment'] = rfm.apply(segment_customer, axis=1)
+
+print(f"\nRFM Summary Statistics:")
+print(rfm[['Recency', 'Frequency', 'Monetary']].describe().round(2))
+
+print(f"\nCustomer Segments:")
+seg_counts = rfm['Segment'].value_counts()
+seg_revenue = rfm.groupby('Segment')['Monetary'].sum().sort_values(ascending=False)
+seg_summary = pd.DataFrame({'Customers': seg_counts, 'Total Revenue': seg_revenue}).fillna(0)
+seg_summary['Avg Revenue'] = (seg_summary['Total Revenue'] / seg_summary['Customers']).round(2)
+seg_summary['% Customers'] = (seg_summary['Customers'] / len(rfm) * 100).round(1)
+print(seg_summary.sort_values('Total Revenue', ascending=False))
+
 transaction_stats = df.groupby('transaction_id').agg({
     'total_amount': 'sum',
     'quantity': 'sum',
     'date': 'first'
 }).reset_index()
-
-print(f"Average Transaction Value: ${transaction_stats['total_amount'].mean():.2f}")
-print(f"Median Transaction Value: ${transaction_stats['total_amount'].median():.2f}")
-print(f"Average Items per Transaction: {transaction_stats['quantity'].mean():.1f}")
-
 bins = [0, 10, 25, 50, 100, float('inf')]
 labels = ['$0-10', '$10-25', '$25-50', '$50-100', '$100+']
 transaction_stats['value_segment'] = pd.cut(transaction_stats['total_amount'], bins=bins, labels=labels)
@@ -350,15 +415,28 @@ ax8.set_xlabel('Unit Price ($)')
 ax8.set_ylabel('Frequency')
 ax8.legend(fontsize=8, loc='upper right')
 
-# 9. Daily Sales Heatmap (Jan-Jun, first 15 days shown for readability)
+# 9. Week-of-year × Day-of-week heatmap (full year, reveals weekly rhythms)
 ax9 = fig.add_subplot(4, 3, 9)
-df['day'] = df['date'].dt.day
-df['month_num'] = df['date'].dt.month
-pivot_data = df.groupby(['month_num', 'day'])['total_amount'].sum().unstack(fill_value=0)
-sns.heatmap(pivot_data.iloc[:6, :15], cmap='YlOrRd', ax=ax9, cbar_kws={'label': 'Sales ($)'})
-ax9.set_title('Daily Sales Heatmap (Jan-Jun)', fontsize=14, fontweight='bold')
-ax9.set_xlabel('Day of Month')
-ax9.set_ylabel('Month')
+df['week'] = df['date'].dt.isocalendar().week.astype(int)
+df['dow_num'] = df['date'].dt.dayofweek          # 0=Mon … 6=Sun
+pivot_weekly = (
+    df.groupby(['dow_num', 'week'])['total_amount']
+    .sum()
+    .unstack(fill_value=0)
+)
+dow_labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+pivot_weekly.index = dow_labels[:len(pivot_weekly)]
+sns.heatmap(
+    pivot_weekly,
+    cmap='YlOrRd',
+    ax=ax9,
+    cbar_kws={'label': 'Sales ($)'},
+    linewidths=0,
+    xticklabels=4               # show every 4th week number to avoid crowding
+)
+ax9.set_title('Weekly Sales Rhythm (Full Year)', fontsize=14, fontweight='bold')
+ax9.set_xlabel('Week of Year')
+ax9.set_ylabel('Day of Week')
 
 # 10. Category Market Share Over Time
 ax10 = fig.add_subplot(4, 3, 10)
@@ -450,20 +528,42 @@ ax4.set_title('Revenue vs Volume by Category', fontsize=14, fontweight='bold')
 ax4.set_xlabel('Total Units Sold')
 ax4.set_ylabel('Total Revenue ($)')
 
-# 5. Sales by Hour of Day (simulated based on weekday/weekend patterns)
+# 5. Sales by Hour of Day — bimodal probability distribution
+#    Weekday: peaks at lunch (12-13) and after-work (17-19)
+#    Weekend: single broad midday peak (11-15)
 ax5 = fig2.add_subplot(2, 3, 5)
-rng = np.random.default_rng(42)  # isolated RNG so seed(42) state is unaffected
-df['hour'] = np.where(
-    df['is_weekend'],
-    rng.choice([9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], len(df)),
-    rng.choice([8, 9, 10, 11, 12, 17, 18, 19, 20], len(df))
+rng = np.random.default_rng(42)  # isolated RNG so global seed(42) state is unaffected
+
+hours = np.arange(8, 21)  # 8 am – 8 pm
+
+# Weekday: bimodal — lunch dip between peaks
+weekday_weights = np.array([0.04, 0.06, 0.10, 0.14, 0.08, 0.05, 0.12, 0.18, 0.14, 0.10, 0.07, 0.06, 0.06])
+weekday_weights /= weekday_weights.sum()
+
+# Weekend: unimodal, broad midday peak
+weekend_weights = np.array([0.03, 0.05, 0.09, 0.13, 0.15, 0.15, 0.13, 0.10, 0.07, 0.05, 0.03, 0.02, 0.01])
+weekend_weights /= weekend_weights.sum()
+
+n = len(df)
+sampled_hours = np.where(
+    df['is_weekend'].values,
+    rng.choice(hours, size=n, p=weekend_weights),
+    rng.choice(hours, size=n, p=weekday_weights)
 )
-hourly_sales = df.groupby('hour')['total_amount'].sum()
-ax5.bar(hourly_sales.index, hourly_sales.values, color='#457B9D', edgecolor='white')
-ax5.set_title('Sales by Hour of Day (Simulated)', fontsize=14, fontweight='bold')
-ax5.set_xlabel('Hour')
+df['hour'] = sampled_hours
+
+hourly_sales = df.groupby('hour')['total_amount'].sum().reindex(hours, fill_value=0)
+bar_colors = ['#E76F51' if h in [12, 13, 17, 18, 19] else '#457B9D' for h in hours]
+ax5.bar(hourly_sales.index, hourly_sales.values, color=bar_colors, edgecolor='white')
+ax5.set_title('Sales by Hour of Day', fontsize=14, fontweight='bold')
+ax5.set_xlabel('Hour of Day')
 ax5.set_ylabel('Total Sales ($)')
-ax5.set_xticks(range(8, 21))
+ax5.set_xticks(hours)
+# Annotate peak hours
+for h, label in [(12, 'Lunch'), (18, 'After-work')]:
+    ax5.annotate(label, xy=(h, hourly_sales[h]),
+                 xytext=(0, 8), textcoords='offset points',
+                 ha='center', fontsize=8, color='#E76F51', fontweight='bold')
 
 # 6. Top 15 Products: Revenue vs Popularity (Bubble Chart)
 ax6 = fig2.add_subplot(2, 3, 6)
@@ -488,3 +588,89 @@ plt.tight_layout()
 plt.savefig('output/retail_eda_advanced.png', dpi=150, bbox_inches='tight', facecolor='white')
 plt.show()
 print("\n✅ Advanced analysis visualizations saved to output/retail_eda_advanced.png")
+
+# =============================================================
+# 7. CUSTOMER ANALYSIS VISUALIZATIONS (6-chart)
+# =============================================================
+
+fig3 = plt.figure(figsize=(18, 14))
+fig3.suptitle('Customer Behavior & RFM Analysis', fontsize=16, fontweight='bold', y=1.01)
+
+# 1. Customer Segment Distribution
+ax1 = fig3.add_subplot(2, 3, 1)
+seg_order = ['Champions', 'Loyal Customers', 'Potential Loyalists', 'New Customers',
+             'At Risk', 'Needs Attention', 'Cannot Lose Them', 'Lost']
+seg_plot = rfm['Segment'].value_counts().reindex(seg_order).dropna()
+colors_seg = ['#2A9D8F', '#264653', '#457B9D', '#A8DADC',
+              '#E76F51', '#F4A261', '#E63946', '#6A4C93']
+ax1.bar(seg_plot.index, seg_plot.values, color=colors_seg[:len(seg_plot)], edgecolor='white')
+ax1.set_title('Customer Segment Distribution', fontsize=14, fontweight='bold')
+ax1.set_xlabel('Segment')
+ax1.set_ylabel('Number of Customers')
+ax1.tick_params(axis='x', rotation=45)
+for bar in ax1.patches:
+    ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
+             f'{int(bar.get_height())}', ha='center', va='bottom', fontsize=9)
+
+# 2. Purchase Frequency Distribution
+ax2 = fig3.add_subplot(2, 3, 2)
+ax2.hist(rfm['Frequency'], bins=30, color='#2E86AB', edgecolor='white', alpha=0.85)
+ax2.axvline(rfm['Frequency'].mean(), color='#E76F51', linestyle='--', linewidth=2,
+            label=f"Mean: {rfm['Frequency'].mean():.1f}")
+ax2.axvline(rfm['Frequency'].median(), color='#2A9D8F', linestyle='--', linewidth=2,
+            label=f"Median: {rfm['Frequency'].median():.0f}")
+ax2.set_title('Purchase Frequency Distribution', fontsize=14, fontweight='bold')
+ax2.set_xlabel('Number of Transactions per Customer')
+ax2.set_ylabel('Number of Customers')
+ax2.legend()
+
+# 3. Revenue by Customer Segment
+ax3 = fig3.add_subplot(2, 3, 3)
+rev_by_seg = rfm.groupby('Segment')['Monetary'].sum().reindex(seg_order).dropna().sort_values(ascending=True)
+ax3.barh(rev_by_seg.index, rev_by_seg.values, color='#A23B72', edgecolor='white')
+ax3.set_title('Total Revenue by Customer Segment', fontsize=14, fontweight='bold')
+ax3.set_xlabel('Total Revenue ($)')
+for bar in ax3.patches:
+    width = bar.get_width()
+    ax3.text(width + 200, bar.get_y() + bar.get_height()/2,
+             f'${width:,.0f}', va='center', fontsize=9)
+
+# 4. Customer Lifetime Value Distribution
+ax4 = fig3.add_subplot(2, 3, 4)
+ax4.hist(rfm['Monetary'], bins=40, color='#6A4C93', edgecolor='white', alpha=0.85)
+ax4.axvline(rfm['Monetary'].mean(), color='#E76F51', linestyle='--', linewidth=2,
+            label=f"Mean: ${rfm['Monetary'].mean():.2f}")
+ax4.axvline(rfm['Monetary'].median(), color='#2A9D8F', linestyle='--', linewidth=2,
+            label=f"Median: ${rfm['Monetary'].median():.2f}")
+ax4.set_title('Customer Lifetime Value Distribution', fontsize=14, fontweight='bold')
+ax4.set_xlabel('Total Spend per Customer ($)')
+ax4.set_ylabel('Number of Customers')
+ax4.legend()
+
+# 5. Repeat vs One-Time Buyers
+ax5 = fig3.add_subplot(2, 3, 5)
+one_time = (rfm['Frequency'] == 1).sum()
+repeat = (rfm['Frequency'] > 1).sum()
+ax5.pie([one_time, repeat],
+        labels=[f'One-Time\n({one_time})', f'Repeat\n({repeat})'],
+        autopct='%1.1f%%',
+        colors=['#E76F51', '#2A9D8F'],
+        startangle=90,
+        wedgeprops={'edgecolor': 'white', 'linewidth': 2})
+ax5.set_title('One-Time vs Repeat Buyers', fontsize=14, fontweight='bold')
+
+# 6. Top 10 Customers by Revenue
+ax6 = fig3.add_subplot(2, 3, 6)
+top_customers = rfm.nlargest(10, 'Monetary')[['customer_id', 'Monetary', 'Frequency', 'Segment']]
+bars = ax6.barh(top_customers['customer_id'], top_customers['Monetary'], color='#F4A261', edgecolor='white')
+ax6.set_title('Top 10 Customers by Revenue', fontsize=14, fontweight='bold')
+ax6.set_xlabel('Total Revenue ($)')
+for bar in bars:
+    width = bar.get_width()
+    ax6.text(width + 50, bar.get_y() + bar.get_height()/2,
+             f'${width:,.0f}', va='center', fontsize=9)
+
+plt.tight_layout()
+plt.savefig('output/retail_eda_customers.png', dpi=150, bbox_inches='tight', facecolor='white')
+plt.show()
+print("\n✅ Customer analysis visualizations saved to output/retail_eda_customers.png")
