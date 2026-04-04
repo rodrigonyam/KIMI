@@ -5,11 +5,13 @@
 import os
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
+
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Ensure output directory exists
 os.makedirs('output', exist_ok=True)
@@ -313,237 +315,239 @@ print(price_analysis)
 # 5. COMPREHENSIVE VISUALIZATIONS (12-chart overview)
 # =============================================================
 
-plt.style.use('seaborn-v0_8-whitegrid')
-sns.set_palette("husl")
+# Precompute series used across multiple charts
+category_sales = df.groupby('category')['total_amount'].sum().sort_values(ascending=False).reset_index()
+category_sales.columns = ['category', 'total_amount']
 
-fig = plt.figure(figsize=(20, 24))
+monthly_sales = df.groupby(df['date'].dt.to_period('M'))['total_amount'].sum().reset_index()
+monthly_sales['date'] = monthly_sales['date'].dt.to_timestamp()
 
-# 1. Sales by Category (Pie Chart)
-ax1 = fig.add_subplot(4, 3, 1)
-category_sales = df.groupby('category')['total_amount'].sum().sort_values(ascending=False)
-colors = plt.cm.Set3(np.linspace(0, 1, len(category_sales)))
-wedges, texts, autotexts = ax1.pie(category_sales.values, labels=category_sales.index, autopct='%1.1f%%',
-                                    colors=colors, startangle=90)
-ax1.set_title('Total Sales Distribution by Category', fontsize=14, fontweight='bold', pad=20)
-plt.setp(autotexts, size=9, weight='bold')
+product_revenue = df.groupby('product')['total_amount'].sum().sort_values(ascending=False).head(10).reset_index()
+product_revenue.columns = ['product', 'revenue']
 
-# 2. Monthly Sales Trend
-ax2 = fig.add_subplot(4, 3, 2)
-monthly_sales = df.groupby(df['date'].dt.to_period('M'))['total_amount'].sum()
-monthly_sales.index = monthly_sales.index.to_timestamp()
-ax2.plot(monthly_sales.index, monthly_sales.values, marker='o', linewidth=2, markersize=6, color='#2E86AB')
-ax2.fill_between(monthly_sales.index, monthly_sales.values, alpha=0.3, color='#2E86AB')
-ax2.set_title('Monthly Sales Trend (2025)', fontsize=14, fontweight='bold')
-ax2.set_xlabel('Month')
-ax2.set_ylabel('Total Sales ($)')
-ax2.tick_params(axis='x', rotation=45)
-
-# 3. Top 10 Products by Revenue
-ax3 = fig.add_subplot(4, 3, 3)
-product_revenue = df.groupby('product')['total_amount'].sum().sort_values(ascending=True).tail(10)
-bars = ax3.barh(product_revenue.index, product_revenue.values, color='#A23B72')
-ax3.set_title('Top 10 Products by Revenue', fontsize=14, fontweight='bold')
-ax3.set_xlabel('Revenue ($)')
-for bar in bars:
-    width = bar.get_width()
-    ax3.text(width + 50, bar.get_y() + bar.get_height()/2, f'${width:,.0f}',
-             va='center', fontsize=9)
-
-# 4. Sales by Day of Week
-ax4 = fig.add_subplot(4, 3, 4)
 dow_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-dow_sales = df.groupby('day_of_week')['total_amount'].sum().reindex(dow_order)
-bars = ax4.bar(dow_sales.index, dow_sales.values,
-               color=['#F18F01' if d in ['Saturday', 'Sunday'] else '#048A81' for d in dow_sales.index])
-ax4.set_title('Sales by Day of Week', fontsize=14, fontweight='bold')
-ax4.set_ylabel('Total Sales ($)')
-ax4.tick_params(axis='x', rotation=45)
-for bar in bars:
-    height = bar.get_height()
-    ax4.text(bar.get_x() + bar.get_width()/2., height + 100, f'${height:,.0f}',
-             ha='center', va='bottom', fontsize=9)
+dow_sales = df.groupby('day_of_week')['total_amount'].sum().reindex(dow_order).reset_index()
+dow_sales.columns = ['day_of_week', 'total_amount']
+dow_sales['is_weekend'] = dow_sales['day_of_week'].isin(['Saturday', 'Sunday'])
 
-# 5. Category Performance Box Plot
-ax5 = fig.add_subplot(4, 3, 5)
-df.boxplot(column='total_amount', by='category', ax=ax5)
-ax5.set_title('Transaction Amount Distribution by Category', fontsize=14, fontweight='bold')
-ax5.set_xlabel('Category')
-ax5.set_ylabel('Transaction Amount ($)')
-fig.suptitle('')  # Remove automatic boxplot supertitle without affecting other figures
-ax5.tick_params(axis='x', rotation=45)
+quantity_dist = df['quantity'].value_counts().sort_index().reset_index()
+quantity_dist.columns = ['quantity', 'count']
 
-# 6. Quantity Distribution
-ax6 = fig.add_subplot(4, 3, 6)
-quantity_dist = df['quantity'].value_counts().sort_index()
-bars = ax6.bar(quantity_dist.index, quantity_dist.values, color='#6A4C93', edgecolor='white')
-ax6.set_title('Quantity per Transaction Distribution', fontsize=14, fontweight='bold')
-ax6.set_xlabel('Quantity')
-ax6.set_ylabel('Frequency')
-for bar in bars:
-    height = bar.get_height()
-    ax6.text(bar.get_x() + bar.get_width()/2., height + 20, f'{int(height)}',
-             ha='center', va='bottom', fontsize=10)
+quarterly_data = df.groupby('quarter').agg(
+    Total_Sales=('total_amount', 'sum'),
+    Transactions=('transaction_id', 'nunique')
+).reset_index()
 
-# 7. Quarterly Comparison
-ax7 = fig.add_subplot(4, 3, 7)
-quarterly_data = df.groupby('quarter').agg({
-    'total_amount': 'sum',
-    'transaction_id': 'nunique'
-}).reset_index()
-quarterly_data.columns = ['Quarter', 'Total Sales', 'Transactions']
-x = np.arange(len(quarterly_data))
-width = 0.35
-ax7.bar(x - width/2, quarterly_data['Total Sales'], width, label='Total Sales', color='#F4A261')
-ax7_twin = ax7.twinx()
-ax7_twin.bar(x + width/2, quarterly_data['Transactions'], width, label='Transactions', color='#2A9D8F')
-ax7.set_title('Quarterly Sales vs Transaction Count', fontsize=14, fontweight='bold')
-ax7.set_xlabel('Quarter')
-ax7.set_ylabel('Total Sales ($)', color='#F4A261')
-ax7_twin.set_ylabel('Transaction Count', color='#2A9D8F')
-ax7.set_xticks(x)
-ax7.set_xticklabels(quarterly_data['Quarter'])
-ax7.legend(loc='upper left')
-ax7_twin.legend(loc='upper right')
-
-# 8. Price Distribution by Category
-ax8 = fig.add_subplot(4, 3, 8)
-for category in df['category'].unique():
-    data = df[df['category'] == category]['unit_price']
-    ax8.hist(data, bins=20, alpha=0.6, label=category)
-ax8.set_title('Unit Price Distribution by Category', fontsize=14, fontweight='bold')
-ax8.set_xlabel('Unit Price ($)')
-ax8.set_ylabel('Frequency')
-ax8.legend(fontsize=8, loc='upper right')
-
-# 9. Week-of-year × Day-of-week heatmap (full year, reveals weekly rhythms)
-ax9 = fig.add_subplot(4, 3, 9)
-df['week'] = df['date'].dt.isocalendar().week.astype(int)
-df['dow_num'] = df['date'].dt.dayofweek          # 0=Mon … 6=Sun
-pivot_weekly = (
-    df.groupby(['dow_num', 'week'])['total_amount']
-    .sum()
-    .unstack(fill_value=0)
+monthly_category_pct = (
+    df.groupby([df['date'].dt.to_period('M'), 'category'])['total_amount']
+    .sum().unstack(fill_value=0)
 )
+monthly_category_pct = monthly_category_pct.div(monthly_category_pct.sum(axis=1), axis=0) * 100
+monthly_category_pct.index = monthly_category_pct.index.to_timestamp()
+monthly_category_pct = monthly_category_pct.reset_index().melt(id_vars='date', var_name='category', value_name='pct')
+
+avg_transaction = df.groupby('category')['total_amount'].mean().sort_values().reset_index()
+avg_transaction.columns = ['category', 'avg_amount']
+
+df['week'] = df['date'].dt.isocalendar().week.astype(int)
+df['dow_num'] = df['date'].dt.dayofweek
+pivot_weekly = df.groupby(['dow_num', 'week'])['total_amount'].sum().unstack(fill_value=0)
 dow_labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 pivot_weekly.index = dow_labels[:len(pivot_weekly)]
-sns.heatmap(
-    pivot_weekly,
-    cmap='YlOrRd',
-    ax=ax9,
-    cbar_kws={'label': 'Sales ($)'},
-    linewidths=0,
-    xticklabels=4               # show every 4th week number to avoid crowding
+
+corr_data = df[['quantity', 'unit_price', 'total_amount']].corr().round(2)
+
+fig_overview = make_subplots(
+    rows=4, cols=3,
+    subplot_titles=[
+        'Total Sales by Category',
+        'Monthly Sales Trend (2025)',
+        'Top 10 Products by Revenue',
+        'Sales by Day of Week',
+        'Transaction Amount by Category (Box)',
+        'Quantity per Transaction',
+        'Quarterly Sales vs Transactions',
+        'Unit Price Distribution by Category',
+        'Weekly Sales Rhythm (Full Year)',
+        'Category Market Share Over Time (%)',
+        'Avg Transaction Value by Category',
+        'Correlation Matrix',
+    ],
+    specs=[
+        [{'type': 'domain'}, {'type': 'xy'}, {'type': 'xy'}],
+        [{'type': 'xy'},     {'type': 'xy'}, {'type': 'xy'}],
+        [{'type': 'xy'},     {'type': 'xy'}, {'type': 'xy'}],
+        [{'type': 'xy'},     {'type': 'xy'}, {'type': 'xy'}],
+    ],
+    vertical_spacing=0.08,
+    horizontal_spacing=0.08,
 )
-ax9.set_title('Weekly Sales Rhythm (Full Year)', fontsize=14, fontweight='bold')
-ax9.set_xlabel('Week of Year')
-ax9.set_ylabel('Day of Week')
 
-# 10. Category Market Share Over Time
-ax10 = fig.add_subplot(4, 3, 10)
-monthly_category = df.groupby([df['date'].dt.to_period('M'), 'category'])['total_amount'].sum().unstack(fill_value=0)
-monthly_category_pct = monthly_category.div(monthly_category.sum(axis=1), axis=0) * 100
-monthly_category_pct.plot(kind='area', stacked=True, ax=ax10, alpha=0.8)
-ax10.set_title('Category Market Share Over Time (%)', fontsize=14, fontweight='bold')
-ax10.set_xlabel('Month')
-ax10.set_ylabel('Percentage (%)')
-ax10.legend(loc='upper left', fontsize=8)
-ax10.tick_params(axis='x', rotation=45)
+# 1. Pie – sales by category
+fig_overview.add_trace(
+    go.Pie(labels=category_sales['category'], values=category_sales['total_amount'],
+           textinfo='percent+label', hole=0.3, showlegend=False),
+    row=1, col=1
+)
 
-# 11. Average Transaction Value by Category
-ax11 = fig.add_subplot(4, 3, 11)
-avg_transaction = df.groupby('category')['total_amount'].mean().sort_values(ascending=True)
-bars = ax11.barh(avg_transaction.index, avg_transaction.values, color='#E76F51')
-ax11.set_title('Average Transaction Value by Category', fontsize=14, fontweight='bold')
-ax11.set_xlabel('Average Amount ($)')
-for bar in bars:
-    width = bar.get_width()
-    ax11.text(width + 0.5, bar.get_y() + bar.get_height()/2, f'${width:.2f}',
-              va='center', fontsize=10)
+# 2. Monthly trend line+fill
+fig_overview.add_trace(
+    go.Scatter(x=monthly_sales['date'], y=monthly_sales['total_amount'],
+               mode='lines+markers', fill='tozeroy',
+               line=dict(color='#2E86AB', width=2), name='Monthly Sales'),
+    row=1, col=2
+)
 
-# 12. Correlation Heatmap
-ax12 = fig.add_subplot(4, 3, 12)
-corr_data = df[['quantity', 'unit_price', 'total_amount']].corr()
-sns.heatmap(corr_data, annot=True, cmap='coolwarm', center=0, ax=ax12,
-            square=True, fmt='.2f', cbar_kws={'label': 'Correlation'})
-ax12.set_title('Correlation Matrix', fontsize=14, fontweight='bold')
+# 3. Top-10 products horizontal bar
+fig_overview.add_trace(
+    go.Bar(x=product_revenue['revenue'], y=product_revenue['product'],
+           orientation='h', marker_color='#A23B72',
+           text=product_revenue['revenue'].map('${:,.0f}'.format),
+           textposition='outside', showlegend=False),
+    row=1, col=3
+)
 
-plt.tight_layout()
-plt.savefig('output/retail_eda_overview.png', dpi=150, bbox_inches='tight', facecolor='white')
-plt.show()
-print("\n✅ Comprehensive EDA visualization saved to output/retail_eda_overview.png")
+# 4. Day-of-week bar
+fig_overview.add_trace(
+    go.Bar(x=dow_sales['day_of_week'], y=dow_sales['total_amount'],
+           marker_color=dow_sales['is_weekend'].map({True: '#F18F01', False: '#048A81'}),
+           text=dow_sales['total_amount'].map('${:,.0f}'.format),
+           textposition='outside', showlegend=False),
+    row=2, col=1
+)
+
+# 5. Box plot per category
+for cat in df['category'].unique():
+    fig_overview.add_trace(
+        go.Box(y=df.loc[df['category'] == cat, 'total_amount'],
+               name=cat, showlegend=False, boxpoints=False),
+        row=2, col=2
+    )
+
+# 6. Quantity distribution bar
+fig_overview.add_trace(
+    go.Bar(x=quantity_dist['quantity'], y=quantity_dist['count'],
+           marker_color='#6A4C93',
+           text=quantity_dist['count'], textposition='outside', showlegend=False),
+    row=2, col=3
+)
+
+# 7. Quarterly dual bar (Sales left axis, Transactions right axis via secondary_y workaround)
+fig_overview.add_trace(
+    go.Bar(x=quarterly_data['quarter'], y=quarterly_data['Total_Sales'],
+           name='Total Sales', marker_color='#F4A261',
+           text=quarterly_data['Total_Sales'].map('${:,.0f}'.format),
+           textposition='outside'),
+    row=3, col=1
+)
+fig_overview.add_trace(
+    go.Bar(x=quarterly_data['quarter'], y=quarterly_data['Transactions'],
+           name='Transactions', marker_color='#2A9D8F',
+           text=quarterly_data['Transactions'], textposition='outside'),
+    row=3, col=1
+)
+
+# 8. Price histogram per category (overlaid)
+for cat in df['category'].unique():
+    fig_overview.add_trace(
+        go.Histogram(x=df.loc[df['category'] == cat, 'unit_price'],
+                     name=cat, opacity=0.6, nbinsx=20, showlegend=False),
+        row=3, col=2
+    )
+
+# 9. Weekly heatmap
+fig_overview.add_trace(
+    go.Heatmap(
+        z=pivot_weekly.values,
+        x=pivot_weekly.columns.tolist(),
+        y=pivot_weekly.index.tolist(),
+        colorscale='YlOrRd',
+        colorbar=dict(title='Sales ($)', len=0.25, y=0.38),
+        showscale=True,
+    ),
+    row=3, col=3
+)
+
+# 10. Category market share area chart
+for cat in monthly_category_pct['category'].unique():
+    sub = monthly_category_pct[monthly_category_pct['category'] == cat]
+    fig_overview.add_trace(
+        go.Scatter(x=sub['date'], y=sub['pct'],
+                   name=cat, stackgroup='one', mode='none',
+                   fill='tonexty', showlegend=False),
+        row=4, col=1
+    )
+
+# 11. Avg transaction value horizontal bar
+fig_overview.add_trace(
+    go.Bar(x=avg_transaction['avg_amount'], y=avg_transaction['category'],
+           orientation='h', marker_color='#E76F51',
+           text=avg_transaction['avg_amount'].map('${:.2f}'.format),
+           textposition='outside', showlegend=False),
+    row=4, col=2
+)
+
+# 12. Correlation heatmap
+fig_overview.add_trace(
+    go.Heatmap(
+        z=corr_data.values,
+        x=corr_data.columns.tolist(),
+        y=corr_data.index.tolist(),
+        colorscale='RdBu',
+        zmid=0,
+        text=corr_data.values,
+        texttemplate='%{text:.2f}',
+        showscale=False,
+    ),
+    row=4, col=3
+)
+
+fig_overview.update_layout(
+    height=1800,
+    title_text='Retail Store EDA — Overview (2025)',
+    title_font_size=20,
+    template='plotly_white',
+    barmode='group',
+)
+fig_overview.write_html('output/retail_eda_overview.html')
+fig_overview.show()
+print("\n✅ Interactive overview saved to output/retail_eda_overview.html")
 
 # =============================================================
 # 6. ADVANCED ANALYSIS VISUALIZATIONS (6-chart)
 # =============================================================
 
-fig2 = plt.figure(figsize=(18, 14))
+# Precompute
+transaction_totals = df.groupby('transaction_id')['total_amount'].sum().reset_index()
+transaction_totals.columns = ['transaction_id', 'value']
+txn_mean = transaction_totals['value'].mean()
+txn_median = transaction_totals['value'].median()
 
-# 1. Transaction Value Distribution
-ax1 = fig2.add_subplot(2, 3, 1)
-transaction_totals = df.groupby('transaction_id')['total_amount'].sum()
-ax1.hist(transaction_totals, bins=30, color='#264653', edgecolor='white', alpha=0.8)
-ax1.axvline(transaction_totals.mean(), color='#E76F51', linestyle='--', linewidth=2,
-            label=f'Mean: ${transaction_totals.mean():.2f}')
-ax1.axvline(transaction_totals.median(), color='#2A9D8F', linestyle='--', linewidth=2,
-            label=f'Median: ${transaction_totals.median():.2f}')
-ax1.set_title('Distribution of Transaction Values', fontsize=14, fontweight='bold')
-ax1.set_xlabel('Transaction Value ($)')
-ax1.set_ylabel('Frequency')
-ax1.legend()
+month_labels = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
+                7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
+monthly_cat = (
+    df.groupby([df['date'].dt.month, 'category'])['total_amount']
+    .sum().reset_index()
+)
+monthly_cat.columns = ['month_num', 'category', 'sales']
+monthly_cat['month'] = monthly_cat['month_num'].map(month_labels)
 
-# 2. Monthly Sales by Category (Stacked Bar)
-ax2 = fig2.add_subplot(2, 3, 2)
-monthly_cat = df.groupby([df['date'].dt.month, 'category'])['total_amount'].sum().unstack(fill_value=0)
-monthly_cat.plot(kind='bar', stacked=True, ax=ax2, colormap='Set3')
-ax2.set_title('Monthly Sales by Category', fontsize=14, fontweight='bold')
-ax2.set_xlabel('Month')
-ax2.set_ylabel('Sales ($)')
-ax2.legend(title='Category', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-ax2.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], rotation=0)
+daily_sales = df.groupby('date')['total_amount'].sum().reset_index()
+daily_sales.columns = ['date', 'sales']
+daily_sales['rolling_7'] = daily_sales['sales'].rolling(window=7).mean()
 
-# 3. Sales Velocity (Daily trend with moving average)
-ax3 = fig2.add_subplot(2, 3, 3)
-daily_sales = df.groupby('date')['total_amount'].sum()
-rolling_avg = daily_sales.rolling(window=7).mean()
-ax3.plot(daily_sales.index, daily_sales.values, alpha=0.3, color='gray', label='Daily Sales')
-ax3.plot(rolling_avg.index, rolling_avg.values, color='#E63946', linewidth=2, label='7-Day Moving Average')
-ax3.set_title('Sales Trend with Moving Average', fontsize=14, fontweight='bold')
-ax3.set_xlabel('Date')
-ax3.set_ylabel('Sales ($)')
-ax3.legend()
-ax3.tick_params(axis='x', rotation=45)
+cat_summary = df.groupby('category').agg(
+    total_revenue=('total_amount', 'sum'),
+    total_units=('quantity', 'sum')
+).reset_index()
 
-# 4. Category Revenue vs Volume Scatter
-ax4 = fig2.add_subplot(2, 3, 4)
-cat_summary = df.groupby('category').agg({
-    'total_amount': 'sum',
-    'quantity': 'sum'
-}).reset_index()
-ax4.scatter(cat_summary['quantity'], cat_summary['total_amount'],
-            s=200, c=range(len(cat_summary)), cmap='viridis', alpha=0.8, edgecolors='black')
-for i, txt in enumerate(cat_summary['category']):
-    ax4.annotate(txt, (cat_summary['quantity'].iloc[i], cat_summary['total_amount'].iloc[i]),
-                 xytext=(5, 5), textcoords='offset points', fontsize=9)
-ax4.set_title('Revenue vs Volume by Category', fontsize=14, fontweight='bold')
-ax4.set_xlabel('Total Units Sold')
-ax4.set_ylabel('Total Revenue ($)')
-
-# 5. Sales by Hour of Day — bimodal probability distribution
-#    Weekday: peaks at lunch (12-13) and after-work (17-19)
-#    Weekend: single broad midday peak (11-15)
-ax5 = fig2.add_subplot(2, 3, 5)
-rng = np.random.default_rng(42)  # isolated RNG so global seed(42) state is unaffected
-
-hours = np.arange(8, 21)  # 8 am – 8 pm
-
-# Weekday: bimodal — lunch dip between peaks
+# Hourly simulation
+rng = np.random.default_rng(42)
+hours = np.arange(8, 21)
 weekday_weights = np.array([0.04, 0.06, 0.10, 0.14, 0.08, 0.05, 0.12, 0.18, 0.14, 0.10, 0.07, 0.06, 0.06])
 weekday_weights /= weekday_weights.sum()
-
-# Weekend: unimodal, broad midday peak
 weekend_weights = np.array([0.03, 0.05, 0.09, 0.13, 0.15, 0.15, 0.13, 0.10, 0.07, 0.05, 0.03, 0.02, 0.01])
 weekend_weights /= weekend_weights.sum()
-
 n = len(df)
 sampled_hours = np.where(
     df['is_weekend'].values,
@@ -551,126 +555,278 @@ sampled_hours = np.where(
     rng.choice(hours, size=n, p=weekday_weights)
 )
 df['hour'] = sampled_hours
+hourly_sales = df.groupby('hour')['total_amount'].sum().reindex(hours, fill_value=0).reset_index()
+hourly_sales.columns = ['hour', 'sales']
+hourly_sales['peak'] = hourly_sales['hour'].isin([12, 13, 17, 18, 19])
 
-hourly_sales = df.groupby('hour')['total_amount'].sum().reindex(hours, fill_value=0)
-bar_colors = ['#E76F51' if h in [12, 13, 17, 18, 19] else '#457B9D' for h in hours]
-ax5.bar(hourly_sales.index, hourly_sales.values, color=bar_colors, edgecolor='white')
-ax5.set_title('Sales by Hour of Day', fontsize=14, fontweight='bold')
-ax5.set_xlabel('Hour of Day')
-ax5.set_ylabel('Total Sales ($)')
-ax5.set_xticks(hours)
-# Annotate peak hours
+product_perf = df.groupby('product').agg(
+    revenue=('total_amount', 'sum'),
+    transactions=('transaction_id', 'nunique')
+).reset_index().sort_values('revenue', ascending=False).head(15)
+
+fig_adv = make_subplots(
+    rows=2, cols=3,
+    subplot_titles=[
+        'Transaction Value Distribution',
+        'Monthly Sales by Category',
+        'Sales Trend — 7-Day Moving Average',
+        'Revenue vs Volume by Category',
+        'Sales by Hour of Day',
+        'Top 15 Products: Revenue vs Popularity',
+    ],
+    vertical_spacing=0.12,
+    horizontal_spacing=0.1,
+)
+
+# 1. Transaction value histogram + mean/median lines
+fig_adv.add_trace(
+    go.Histogram(x=transaction_totals['value'], nbinsx=30,
+                 marker_color='#264653', opacity=0.85, name='Transactions', showlegend=False),
+    row=1, col=1
+)
+for val, label, color in [(txn_mean, f'Mean ${txn_mean:.2f}', '#E76F51'),
+                           (txn_median, f'Median ${txn_median:.2f}', '#2A9D8F')]:
+    fig_adv.add_vline(x=val, line_dash='dash', line_color=color,
+                      annotation_text=label, annotation_position='top right',
+                      row=1, col=1)
+
+# 2. Monthly stacked bar by category
+for cat in monthly_cat['category'].unique():
+    sub = monthly_cat[monthly_cat['category'] == cat].sort_values('month_num')
+    fig_adv.add_trace(
+        go.Bar(x=sub['month'], y=sub['sales'], name=cat, showlegend=True),
+        row=1, col=2
+    )
+fig_adv.update_layout(barmode='stack')
+
+# 3. Daily + 7-day rolling average
+fig_adv.add_trace(
+    go.Scatter(x=daily_sales['date'], y=daily_sales['sales'],
+               mode='lines', line=dict(color='lightgray', width=1),
+               name='Daily Sales', showlegend=False, opacity=0.5),
+    row=1, col=3
+)
+fig_adv.add_trace(
+    go.Scatter(x=daily_sales['date'], y=daily_sales['rolling_7'],
+               mode='lines', line=dict(color='#E63946', width=2),
+               name='7-Day MA', showlegend=False),
+    row=1, col=3
+)
+
+# 4. Scatter: revenue vs units per category
+fig_adv.add_trace(
+    go.Scatter(
+        x=cat_summary['total_units'], y=cat_summary['total_revenue'],
+        mode='markers+text',
+        text=cat_summary['category'],
+        textposition='top center',
+        marker=dict(size=18, color=list(range(len(cat_summary))),
+                    colorscale='Viridis', showscale=False, opacity=0.85,
+                    line=dict(width=1, color='black')),
+        showlegend=False,
+    ),
+    row=2, col=1
+)
+
+# 5. Hourly bar chart
+fig_adv.add_trace(
+    go.Bar(
+        x=hourly_sales['hour'], y=hourly_sales['sales'],
+        marker_color=hourly_sales['peak'].map({True: '#E76F51', False: '#457B9D'}),
+        text=hourly_sales['sales'].map('${:,.0f}'.format),
+        textposition='outside',
+        showlegend=False,
+        customdata=hourly_sales['peak'],
+    ),
+    row=2, col=2
+)
 for h, label in [(12, 'Lunch'), (18, 'After-work')]:
-    ax5.annotate(label, xy=(h, hourly_sales[h]),
-                 xytext=(0, 8), textcoords='offset points',
-                 ha='center', fontsize=8, color='#E76F51', fontweight='bold')
+    h_val = hourly_sales.loc[hourly_sales['hour'] == h, 'sales'].values[0]
+    fig_adv.add_annotation(
+        x=h, y=h_val, text=label, showarrow=True, arrowhead=2,
+        ax=0, ay=-30, font=dict(color='#E76F51', size=10),
+        row=2, col=2
+    )
 
-# 6. Top 15 Products: Revenue vs Popularity (Bubble Chart)
-ax6 = fig2.add_subplot(2, 3, 6)
-product_perf = df.groupby('product').agg({
-    'total_amount': 'sum',
-    'transaction_id': 'nunique'
-}).reset_index()
-product_perf.columns = ['product', 'revenue', 'transactions']
-product_perf = product_perf.sort_values('revenue', ascending=False).head(15)
-bubble_sizes = product_perf['transactions'] * 3
-ax6.scatter(product_perf['transactions'], product_perf['revenue'],
-            s=bubble_sizes, alpha=0.6, c=range(len(product_perf)), cmap='plasma')
-ax6.set_title('Top 15 Products: Revenue vs Popularity', fontsize=14, fontweight='bold')
-ax6.set_xlabel('Number of Transactions')
-ax6.set_ylabel('Revenue ($)')
-for i in range(5):
-    ax6.annotate(product_perf.iloc[i]['product'],
-                 (product_perf.iloc[i]['transactions'], product_perf.iloc[i]['revenue']),
-                 xytext=(5, 5), textcoords='offset points', fontsize=8)
+# 6. Bubble chart: top 15 products
+fig_adv.add_trace(
+    go.Scatter(
+        x=product_perf['transactions'], y=product_perf['revenue'],
+        mode='markers+text',
+        text=product_perf['product'],
+        textposition='top center',
+        marker=dict(
+            size=product_perf['transactions'] / product_perf['transactions'].max() * 50 + 8,
+            color=list(range(len(product_perf))),
+            colorscale='Plasma', showscale=False, opacity=0.7,
+        ),
+        showlegend=False,
+    ),
+    row=2, col=3
+)
 
-plt.tight_layout()
-plt.savefig('output/retail_eda_advanced.png', dpi=150, bbox_inches='tight', facecolor='white')
-plt.show()
-print("\n✅ Advanced analysis visualizations saved to output/retail_eda_advanced.png")
+fig_adv.update_xaxes(title_text='Transaction Value ($)', row=1, col=1)
+fig_adv.update_yaxes(title_text='Frequency', row=1, col=1)
+fig_adv.update_xaxes(title_text='Month', row=1, col=2)
+fig_adv.update_yaxes(title_text='Sales ($)', row=1, col=2)
+fig_adv.update_xaxes(title_text='Date', row=1, col=3)
+fig_adv.update_yaxes(title_text='Sales ($)', row=1, col=3)
+fig_adv.update_xaxes(title_text='Total Units Sold', row=2, col=1)
+fig_adv.update_yaxes(title_text='Total Revenue ($)', row=2, col=1)
+fig_adv.update_xaxes(title_text='Hour of Day', row=2, col=2)
+fig_adv.update_yaxes(title_text='Total Sales ($)', row=2, col=2)
+fig_adv.update_xaxes(title_text='Number of Transactions', row=2, col=3)
+fig_adv.update_yaxes(title_text='Revenue ($)', row=2, col=3)
+
+fig_adv.update_layout(
+    height=900,
+    title_text='Retail Store EDA — Advanced Analysis (2025)',
+    title_font_size=20,
+    template='plotly_white',
+    legend_title_text='Category',
+)
+fig_adv.write_html('output/retail_eda_advanced.html')
+fig_adv.show()
+print("\n✅ Interactive advanced analysis saved to output/retail_eda_advanced.html")
 
 # =============================================================
 # 7. CUSTOMER ANALYSIS VISUALIZATIONS (6-chart)
 # =============================================================
 
-fig3 = plt.figure(figsize=(18, 14))
-fig3.suptitle('Customer Behavior & RFM Analysis', fontsize=16, fontweight='bold', y=1.01)
-
-# 1. Customer Segment Distribution
-ax1 = fig3.add_subplot(2, 3, 1)
 seg_order = ['Champions', 'Loyal Customers', 'Potential Loyalists', 'New Customers',
              'At Risk', 'Needs Attention', 'Cannot Lose Them', 'Lost']
-seg_plot = rfm['Segment'].value_counts().reindex(seg_order).dropna()
-colors_seg = ['#2A9D8F', '#264653', '#457B9D', '#A8DADC',
+seg_colors = ['#2A9D8F', '#264653', '#457B9D', '#A8DADC',
               '#E76F51', '#F4A261', '#E63946', '#6A4C93']
-ax1.bar(seg_plot.index, seg_plot.values, color=colors_seg[:len(seg_plot)], edgecolor='white')
-ax1.set_title('Customer Segment Distribution', fontsize=14, fontweight='bold')
-ax1.set_xlabel('Segment')
-ax1.set_ylabel('Number of Customers')
-ax1.tick_params(axis='x', rotation=45)
-for bar in ax1.patches:
-    ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 2,
-             f'{int(bar.get_height())}', ha='center', va='bottom', fontsize=9)
+color_map = dict(zip(seg_order, seg_colors))
 
-# 2. Purchase Frequency Distribution
-ax2 = fig3.add_subplot(2, 3, 2)
-ax2.hist(rfm['Frequency'], bins=30, color='#2E86AB', edgecolor='white', alpha=0.85)
-ax2.axvline(rfm['Frequency'].mean(), color='#E76F51', linestyle='--', linewidth=2,
-            label=f"Mean: {rfm['Frequency'].mean():.1f}")
-ax2.axvline(rfm['Frequency'].median(), color='#2A9D8F', linestyle='--', linewidth=2,
-            label=f"Median: {rfm['Frequency'].median():.0f}")
-ax2.set_title('Purchase Frequency Distribution', fontsize=14, fontweight='bold')
-ax2.set_xlabel('Number of Transactions per Customer')
-ax2.set_ylabel('Number of Customers')
-ax2.legend()
+seg_plot = rfm['Segment'].value_counts().reindex(seg_order).dropna().reset_index()
+seg_plot.columns = ['Segment', 'count']
 
-# 3. Revenue by Customer Segment
-ax3 = fig3.add_subplot(2, 3, 3)
-rev_by_seg = rfm.groupby('Segment')['Monetary'].sum().reindex(seg_order).dropna().sort_values(ascending=True)
-ax3.barh(rev_by_seg.index, rev_by_seg.values, color='#A23B72', edgecolor='white')
-ax3.set_title('Total Revenue by Customer Segment', fontsize=14, fontweight='bold')
-ax3.set_xlabel('Total Revenue ($)')
-for bar in ax3.patches:
-    width = bar.get_width()
-    ax3.text(width + 200, bar.get_y() + bar.get_height()/2,
-             f'${width:,.0f}', va='center', fontsize=9)
+rev_by_seg = (
+    rfm.groupby('Segment')['Monetary'].sum()
+    .reindex(seg_order).dropna().sort_values(ascending=True)
+    .reset_index()
+)
+rev_by_seg.columns = ['Segment', 'Revenue']
 
-# 4. Customer Lifetime Value Distribution
-ax4 = fig3.add_subplot(2, 3, 4)
-ax4.hist(rfm['Monetary'], bins=40, color='#6A4C93', edgecolor='white', alpha=0.85)
-ax4.axvline(rfm['Monetary'].mean(), color='#E76F51', linestyle='--', linewidth=2,
-            label=f"Mean: ${rfm['Monetary'].mean():.2f}")
-ax4.axvline(rfm['Monetary'].median(), color='#2A9D8F', linestyle='--', linewidth=2,
-            label=f"Median: ${rfm['Monetary'].median():.2f}")
-ax4.set_title('Customer Lifetime Value Distribution', fontsize=14, fontweight='bold')
-ax4.set_xlabel('Total Spend per Customer ($)')
-ax4.set_ylabel('Number of Customers')
-ax4.legend()
+one_time = int((rfm['Frequency'] == 1).sum())
+repeat = int((rfm['Frequency'] > 1).sum())
 
-# 5. Repeat vs One-Time Buyers
-ax5 = fig3.add_subplot(2, 3, 5)
-one_time = (rfm['Frequency'] == 1).sum()
-repeat = (rfm['Frequency'] > 1).sum()
-ax5.pie([one_time, repeat],
-        labels=[f'One-Time\n({one_time})', f'Repeat\n({repeat})'],
-        autopct='%1.1f%%',
-        colors=['#E76F51', '#2A9D8F'],
-        startangle=90,
-        wedgeprops={'edgecolor': 'white', 'linewidth': 2})
-ax5.set_title('One-Time vs Repeat Buyers', fontsize=14, fontweight='bold')
+top_customers = rfm.nlargest(10, 'Monetary')[['customer_id', 'Monetary', 'Frequency', 'Segment']].copy()
+top_customers = top_customers.sort_values('Monetary', ascending=True)
 
-# 6. Top 10 Customers by Revenue
-ax6 = fig3.add_subplot(2, 3, 6)
-top_customers = rfm.nlargest(10, 'Monetary')[['customer_id', 'Monetary', 'Frequency', 'Segment']]
-bars = ax6.barh(top_customers['customer_id'], top_customers['Monetary'], color='#F4A261', edgecolor='white')
-ax6.set_title('Top 10 Customers by Revenue', fontsize=14, fontweight='bold')
-ax6.set_xlabel('Total Revenue ($)')
-for bar in bars:
-    width = bar.get_width()
-    ax6.text(width + 50, bar.get_y() + bar.get_height()/2,
-             f'${width:,.0f}', va='center', fontsize=9)
+fig_cust = make_subplots(
+    rows=2, cols=3,
+    subplot_titles=[
+        'Customer Segment Distribution',
+        'Purchase Frequency Distribution',
+        'Total Revenue by Customer Segment',
+        'Customer Lifetime Value Distribution',
+        'One-Time vs Repeat Buyers',
+        'Top 10 Customers by Revenue',
+    ],
+    specs=[
+        [{'type': 'xy'},     {'type': 'xy'},     {'type': 'xy'}],
+        [{'type': 'xy'},     {'type': 'domain'}, {'type': 'xy'}],
+    ],
+    vertical_spacing=0.14,
+    horizontal_spacing=0.1,
+)
 
-plt.tight_layout()
-plt.savefig('output/retail_eda_customers.png', dpi=150, bbox_inches='tight', facecolor='white')
-plt.show()
-print("\n✅ Customer analysis visualizations saved to output/retail_eda_customers.png")
+# 1. Segment bar chart
+fig_cust.add_trace(
+    go.Bar(
+        x=seg_plot['Segment'], y=seg_plot['count'],
+        marker_color=[color_map.get(s, '#888') for s in seg_plot['Segment']],
+        text=seg_plot['count'], textposition='outside',
+        showlegend=False,
+    ),
+    row=1, col=1
+)
+
+# 2. Purchase frequency histogram + mean/median
+freq_mean = rfm['Frequency'].mean()
+freq_median = rfm['Frequency'].median()
+fig_cust.add_trace(
+    go.Histogram(x=rfm['Frequency'], nbinsx=30,
+                 marker_color='#2E86AB', opacity=0.85, showlegend=False),
+    row=1, col=2
+)
+for val, label, color in [(freq_mean, f'Mean {freq_mean:.1f}', '#E76F51'),
+                           (freq_median, f'Median {freq_median:.0f}', '#2A9D8F')]:
+    fig_cust.add_vline(x=val, line_dash='dash', line_color=color,
+                       annotation_text=label, annotation_position='top right',
+                       row=1, col=2)
+
+# 3. Revenue by segment horizontal bar
+fig_cust.add_trace(
+    go.Bar(
+        x=rev_by_seg['Revenue'], y=rev_by_seg['Segment'],
+        orientation='h',
+        marker_color=[color_map.get(s, '#888') for s in rev_by_seg['Segment']],
+        text=rev_by_seg['Revenue'].map('${:,.0f}'.format),
+        textposition='outside',
+        showlegend=False,
+    ),
+    row=1, col=3
+)
+
+# 4. CLV (Monetary) histogram + mean/median
+mon_mean = rfm['Monetary'].mean()
+mon_median = rfm['Monetary'].median()
+fig_cust.add_trace(
+    go.Histogram(x=rfm['Monetary'], nbinsx=40,
+                 marker_color='#6A4C93', opacity=0.85, showlegend=False),
+    row=2, col=1
+)
+for val, label, color in [(mon_mean, f'Mean ${mon_mean:.0f}', '#E76F51'),
+                           (mon_median, f'Median ${mon_median:.0f}', '#2A9D8F')]:
+    fig_cust.add_vline(x=val, line_dash='dash', line_color=color,
+                       annotation_text=label, annotation_position='top right',
+                       row=2, col=1)
+
+# 5. One-time vs repeat pie
+fig_cust.add_trace(
+    go.Pie(
+        labels=[f'One-Time ({one_time})', f'Repeat ({repeat})'],
+        values=[one_time, repeat],
+        marker_colors=['#E76F51', '#2A9D8F'],
+        textinfo='percent+label',
+        hole=0.35,
+        showlegend=False,
+    ),
+    row=2, col=2
+)
+
+# 6. Top-10 customers horizontal bar
+fig_cust.add_trace(
+    go.Bar(
+        x=top_customers['Monetary'], y=top_customers['customer_id'],
+        orientation='h',
+        marker_color='#F4A261',
+        text=top_customers['Monetary'].map('${:,.0f}'.format),
+        textposition='outside',
+        customdata=top_customers[['Frequency', 'Segment']].values,
+        hovertemplate='<b>%{y}</b><br>Revenue: %{x:$,.0f}<br>Visits: %{customdata[0]}<br>Segment: %{customdata[1]}<extra></extra>',
+        showlegend=False,
+    ),
+    row=2, col=3
+)
+
+fig_cust.update_xaxes(title_text='Number of Customers', row=1, col=1)
+fig_cust.update_xaxes(title_text='Transactions per Customer', row=1, col=2)
+fig_cust.update_yaxes(title_text='Number of Customers', row=1, col=2)
+fig_cust.update_xaxes(title_text='Total Revenue ($)', row=1, col=3)
+fig_cust.update_xaxes(title_text='Total Spend ($)', row=2, col=1)
+fig_cust.update_yaxes(title_text='Number of Customers', row=2, col=1)
+fig_cust.update_xaxes(title_text='Total Revenue ($)', row=2, col=3)
+
+fig_cust.update_layout(
+    height=900,
+    title_text='Retail Store EDA — Customer Behavior & RFM (2025)',
+    title_font_size=20,
+    template='plotly_white',
+)
+fig_cust.write_html('output/retail_eda_customers.html')
+fig_cust.show()
+print("\n✅ Interactive customer analysis saved to output/retail_eda_customers.html")
